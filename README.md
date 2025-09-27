@@ -1,4 +1,4 @@
-#Neighbor Analysis
+# Neighbor Analysis
 
 Thank you for the opportunity to provide my thoughts here. 
 
