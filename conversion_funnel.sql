@@ -1,21 +1,38 @@
 
 -- conversion_funnel 
 
-with searches as (
-    select
-        search_id,
-        merged_amplitude_id,
-        first_attribution_source,
-        first_attribution_channel,
-        search_type,
-        search_term,
-        search_term_category,
-        cast(event_date as date) as search_event_date,
-        cast(event_time as datetime) as search_event_time
-    from
-        all_search_events
+with ranked_searches as (
+  select
+    search_id,
+    merged_amplitude_id,
+    cast(event_time as datetime) as search_event_time,
+    row_number() over (
+      partition by merged_amplitude_id
+      order by cast(event_time as datetime) asc
+    ) as search_rank
+  from
+    all_search_events
 ),
 
+searches as (
+    select
+        s.search_id,
+        case
+        	when search_rank = 1 then 1
+        	else 0
+        end as is_first_search,
+        s.merged_amplitude_id,
+        s.first_attribution_source,
+        s.first_attribution_channel,
+        s.search_type,
+        s.search_term,
+        s.search_term_category,
+        cast(s.event_date as date) as search_event_date,
+        cast(s.event_time as datetime) as search_event_time
+    from
+        all_search_events s
+        	left join ranked_searches rs on s.search_id = rs.search_id and s.merged_amplitude_id = rs.merged_amplitude_id
+),
 
 clicks as (
     select
@@ -35,21 +52,20 @@ clicks as (
         click_event_date
 ),
 
-
 reservations as (
     select
-        reservation_id,
-        listing_id,
-        cast(created_at as date) as created_at,
-        cast(created_at as datetime) as created_at_time,
-        cast(approved_at as date) as approved_at,
-        cast(approved_at as datetime) as approved_at_time,
-        cast(successful_payment_collected_at as date) as successful_payment_collected_at,
-        cast(successful_payment_collected_at as datetime) as successful_payment_collected_at_time
+        r.reservation_id,
+        r.listing_id,
+        cast(r.created_at as date) as created_at,
+        cast(r.created_at as datetime) as created_at_time,
+        cast(r.approved_at as date) as approved_at,
+        cast(r.approved_at as datetime) as approved_at_time,
+        cast(r.successful_payment_collected_at as date) as successful_payment_collected_at,
+        cast(r.successful_payment_collected_at as datetime) as successful_payment_collected_at_time
     from
-        reservations
-),
+        reservations r 
 
+),
 
 funnel as (
     select
@@ -75,7 +91,7 @@ funnel as (
         searches s
         left join clicks c on s.search_id = c.search_id and s.merged_amplitude_id = c.merged_amplitude_id
         left join reservations r on s.search_event_date = r.created_at and c.listing_id = r.listing_id
-)
+),
 
 
 -- BELOW ARE QUERIES BASED ON FINAL funnel CTE FROM THE ABOVE QUERY
@@ -132,6 +148,45 @@ group by
     first_attribution_channel
 order by
     click_to_reservation_rate_percent desc;
+
+
+-- first time searchers vs repeat searchers
+
+funnel_stages as (
+    select
+        is_first_search,
+        count(distinct search_id) as total_searches,
+        count(distinct case
+                when click_date is not null then search_id
+                else null
+            end) as searches_with_click,
+        count(distinct case
+                when successful_payment_collected_at is not null then search_id
+                else null
+            end) as successful_reservations
+    from
+        funnel
+    group by
+        is_first_search
+)
+
+
+select
+    is_first_search,
+    total_searches,
+    searches_with_click,
+    successful_reservations,
+    (searches_with_click * 100.0 / total_searches) as search_to_click_rate,
+    (successful_reservations * 100.0 / searches_with_click) as click_to_reservation_rate,
+    (successful_reservations * 100.0 / total_searches) as overall_conversion_rate
+from
+    funnel_stages;
+
+
+
+
+
+
 
 -- ADDITIONAL ANALYSIS BELOW - NOT PART OF FINAL QUERY
 
